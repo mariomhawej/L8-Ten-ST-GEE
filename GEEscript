@@ -1,15 +1,6 @@
 // A UI to interactively filter a collection, select an individual image
 // from the results, display it with a variety of visualizations, and export it.
     
-    var geometry = 
-    /* color: #d63000 */
-    /* shown: false */
-    ee.Geometry.Polygon(
-        [[[-119.4914315532198, 35.6244945376284],
-          [-119.4914315532198, 35.485396701596315],
-          [-119.25110562548542, 35.485396701596315],
-          [-119.25110562548542, 35.6244945376284]]], null, false);
-          
 // The namespace for our application.  All the state is kept in here.
 var app = {};
 
@@ -37,9 +28,13 @@ app.createPanels = function() {
       }),
         ui.Label({
         value: ' This application allows to assess Land Surface Tempearture (LST) values' +
-               ' based on the 10-m Sentinel-2 satellite collection. User has to only include the requested month and year'
+               ' based on the 10-m Sentinel-2 satellite collection from April 2017. User has to only include the requested month and year'
                + ' as well as the study area. Ten-ST-GEE will do the rest!',
         style: {fontWeight: '50', fontSize: '11px', margin: '10px 5px', textAlign: 'left', fontFamily: 'serif'}
+      }),
+      ui.Label({
+        value: 'For further information, kindly refer to Abunnasr and Mhawej (2022).',
+        style: {fontWeight: '30', fontSize: '9px', margin: '10px 5px', textAlign: 'left', fontFamily: 'serif'}
       }),
     ]),
   };
@@ -79,11 +74,11 @@ app.createPanels = function() {
       style: {fontWeight: 'bold', fontFamily: 'serif'},
       // React to the button's click event.
       onClick: function() {
-        
+      
   /** Ten-ST_GEE */
     app.setLoadingMode(true);
     
-        // Retreive needed value
+    /* Retreive needed value */
     var m = app.filters.m.getValue();
     var year = app.filters.year.getValue();
     var any = ee.Number.parse(year);
@@ -92,279 +87,587 @@ app.createPanels = function() {
           app.setLoadingMode(false);
         });
 
-//-----------------------------------------------------------------
-//-----------------------------------------------------------------
-
-/* Convert to temporal frame */
-var start = new Date(year + "-" + m + "-01");
-var end = new Date(year + "-" + m + "-28");
-
-var system =  year + ""+ "0" + m;
+    //-----------------------------------------------------------------
+    //-----------------------------------------------------------------
     
-/* Landsat 8 image assessment*/
-  function maskL8sr(image) {
-  // Bits 3 and 5 are cloud shadow and cloud, respectively.
-  var cloudShadowBitMask = (1 << 3);
-  var cloudsBitMask = (1 << 5);
-  // Get the pixel QA band.
-  var qa = image.select('pixel_qa');
-  // Both flags should be set to zero, indicating clear conditions.
-  var mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0)
-                 .and(qa.bitwiseAnd(cloudsBitMask).eq(0));
-  return image.updateMask(mask);
-}
-
-var landsat = ee.ImageCollection("LANDSAT/LC08/C01/T1_SR")
-       .filterDate(start, end)
-       .map(maskL8sr);
-
-// Calculate median
-var median = landsat.median();
-
-var l8m = median.select('B2', 'B3', 'B4', 'B5', 'B10', 'B11', 'pixel_qa')
-          .reproject(median.select('B2').projection(), null, 30);
-
-// Calculate NDVI
-var ndvi = l8m.normalizedDifference(['B5','B4']);
-
-// Calculate LAI
-var LAI_1 = ndvi.multiply(ndvi.multiply(ndvi.multiply(9.519)));
-var LAI_2 = ndvi.multiply(ndvi.multiply(0.104));
-var LAI_3 = ndvi.multiply (1.236);
-var LAI = LAI_1.add(LAI_2).add(LAI_3).subtract(0.257).rename('LAI');
-
-// Calculate LST
-// Calculate eNB
-var eNB_1 = LAI.multiply(0.0033).add(0.97).rename('eNB');
-var eNB = LAI.expression(
-      "(b1 > 3 ) ? 0.98" +
-      ": b0",
-      {
-      'b0': eNB_1.select('eNB'),
-      'b1': LAI.select('LAI') ,
-});
-
-// Calculate LST 10
-var LST10_1 = l8m.select('B10');
-var LST10 = LST10_1.multiply(eNB).multiply(0.1);
-
-// Calculate LST 11
-var LST11_1 = l8m.select('B11');
-var LST11 = LST10_1.multiply(eNB).multiply(0.1);
-
-// Calculate LST median
-var LSTm = LST10.add(LST11).divide(2)
-          .reproject(median.select('B2').projection(), null, 30);
-
-// Define the visualization parameters.
-var vizParamsl8 = {
-  bands: ['B4', 'B3', 'B2'],
-  min: 0,
-  max: 3000,
-  gamma: 1.4,
-};
-
-var visParams = {min: 270, max: 310, palette: [
-    '040274', '040281', '0502a3', '0502b8', '0502ce', '0502e6',
-    '0602ff', '235cb1', '307ef3', '269db1', '30c8e2', '32d3ef',
-    '3be285', '3ff38f', '86e26f', '3ae237', 'b5e22e', 'd6e21f',
-    'fff705', 'ffd611', 'ffb613', 'ff8b13', 'ff6e08', 'ff500d',
-    'ff0000', 'de0101', 'c21301', 'a71001', '911003'
-  ],};
+    /* Convert to temporal frame */
+    var start = new Date(year + "-" + m + "-01");
+    var end = new Date(year + "-" + m + "-28");
+    
+    var system =  year + m;
         
-// Map results
-Map.centerObject(geometry,12);
-Map.addLayer(l8m,vizParamsl8,'Landsat-8 RGB'+ ' Date: '+ year + m);
-Map.addLayer(LSTm,visParams,'Landsat-8 LST'+ ' Date: '+ year + m);
-
-// Export a cloud-optimized GeoTIFF.
-Export.image.toDrive({
-  image: LSTm,
-  description: 'L8_LST_' + system,
-  scale: 30,
-  region: geometry,
-  fileFormat: 'GeoTIFF',
-  maxPixels: 1e9,
-  formatOptions: {
-    cloudOptimized: true
-  }
-});
-
-/* Sentinel-2 image assessment*/
-  // Function to mask clouds using the Sentinel-2 QA band.
-function maskS2clouds(image) {
-  var qa = image.select('QA60');
-
-  // Bits 10 and 11 are clouds and cirrus, respectively.
-  var cloudBitMask = ee.Number(2).pow(10).int();
-  var cirrusBitMask = ee.Number(2).pow(11).int();
-
-  // Both flags should be set to zero, indicating clear conditions.
-  var mask = qa.bitwiseAnd(cloudBitMask).eq(0).and(
-             qa.bitwiseAnd(cirrusBitMask).eq(0));
-
-  // Return the masked and scaled data, without the QA bands.
-  return image.updateMask(mask).divide(10000)
-      .select("B.*")
-      .copyProperties(image, ["system:time_start"]);
-}
-
-// Map the function over one year of data and take the median.
-// Load Sentinel-2 TOA reflectance data.
-var collection = ee.ImageCollection('COPERNICUS/S2_SR')
-    .filterDate(start, end)
-    .filterBounds(geometry)
-    // Pre-filter to get less cloudy granules.
-    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20))
-    .map(maskS2clouds);
-
-// Calculate median
-var median2 = collection.median();
-var s2m = median2.select('B2', 'B3', 'B4')
-          .reproject(median.select('B2').projection(), null, 10);
-
-// Define the visualization parameters.
-var vizParams = {
-  bands: ['B4', 'B3', 'B2'],
-  min: 0,
-  max: 0.5,
-  gamma: [0.95, 1.1, 1]
-};
+    /* Sentinel-2 images assessment*/
+      // Function to mask clouds using the Sentinel-2 QA band.
+    function maskS2clouds(image) {
+      var qa = image.select('QA60');
     
-// Map results
-Map.addLayer(s2m,vizParams,'Sentinel-2 RGB'+ ' Date: '+ year + m);
-
-/* Bandpass adjustment */
-  // Create a new images that is the concatenation of two bands from two sensors
-var red = ee.Image.cat(s2m.select('B4'),l8m.select('B4'));
-var green = ee.Image.cat(s2m.select('B3'),l8m.select('B3'));
-var blue = ee.Image.cat(s2m.select('B2'),l8m.select('B2'));
-
-// Calculate regression coefficients for the set of pixels
-var linearFitr = red.reduceRegion({
-  reducer: ee.Reducer.linearFit(),
-  geometry: geometry,
-  scale: 30,
-});
-
-// Extract the y-intercept and slope.
-var b0r = linearFitr.get('offset'); // y-intercept
-var b1r = linearFitr.get('scale'); // slope
-
-var new_s2r = s2m.select('B4').multiply(ee.Number(b1r)).add(ee.Number(b0r))
-          .reproject(median.select('B2').projection(), null, 10);
-
-//Map.addLayer(new_s2r,{max: 5000, min: 0}, 'Sentinel-2 RGB');
-
-// Calculate regression coefficients for the set of pixels
-var linearFitg = green.reduceRegion({
-  reducer: ee.Reducer.linearFit(),
-  geometry: geometry,
-  scale: 30,
-});
-
-// Extract the y-intercept and slope.
-var b0g = linearFitg.get('offset'); // y-intercept
-var b1g = linearFitg.get('scale'); // slope
-
-var new_s2g = s2m.select('B3').multiply(ee.Number(b1g)).add(ee.Number(b0g))
-          .reproject(median.select('B2').projection(), null, 10);
-
-// Calculate regression coefficients for the set of pixels
-var linearFitb = blue.reduceRegion({
-  reducer: ee.Reducer.linearFit(),
-  geometry: geometry,
-  scale: 30,
-});
-
-// Extract the y-intercept and slope.
-var b0b = linearFitb.get('offset'); // y-intercept
-var b1b = linearFitb.get('scale'); // slope
-
-var new_s2b = s2m.select('B2').multiply(ee.Number(b1b)).add(ee.Number(b0b))
-          .reproject(median.select('B2').projection(), null, 10);
-
-/* OLS between L8 RGB and LST values */
-  // Aggregation of LST
-  var agg_LST = LSTm
-    // Force the next reprojection to aggregate instead of resampling.
-    .reduceResolution({
-      reducer: ee.Reducer.mean(),
-      maxPixels: 900
-    })
-    .reproject(median.select('B2').projection(), null, 900);
-
-// Create a new image that is the concatenation of these bands
-var imgRegress = ee.Image.cat(l8m.select('B4'), l8m.select('B3'),
-                l8m.select('B2'),agg_LST, LSTm);
-
-// Calculate regression coefficients
-var linearRegression = imgRegress.reduceRegion({
-  reducer: ee.Reducer.robustLinearRegression({
-    numX: 4,
-    numY: 1
-  }),
-  geometry: geometry,
-  scale: 30,
-});
-
-// Convert the coefficients array to a list.
-var coefList = ee.Array(linearRegression.get('coefficients')).toList();
-
-// Extract the y-intercept and slope.
-var b4 = ee.List(coefList.get(0)).get(0); // y-red
-var b3 = ee.List(coefList.get(1)).get(0); // y-green
-var b2 = ee.List(coefList.get(2)).get(0); // y-blue
-var b1 = ee.List(coefList.get(3)).get(0); // slope
-
-// Extract the residuals.
-var residuals = ee.Array(linearRegression.get('residuals')).toList().get(0);
-
-/* Calculate S2-LST */
-  var s2_lst = new_s2r.multiply(ee.Number(b4)).add(new_s2g.multiply(ee.Number(b3)))
-              .add(new_s2b.multiply(ee.Number(b2))).add(LSTm.multiply(ee.Number(b1)))
-              .add(ee.Number(residuals))
-              .reproject(median.select('B2').projection(), null, 10);
+      // Bits 10 and 11 are clouds and cirrus, respectively.
+      var cloudBitMask = ee.Number(2).pow(10).int();
+      var cirrusBitMask = ee.Number(2).pow(11).int();
+    
+      // Both flags should be set to zero, indicating clear conditions.
+      var mask = qa.bitwiseAnd(cloudBitMask).eq(0).and(
+                 qa.bitwiseAnd(cirrusBitMask).eq(0));
+    
+      // Return the masked and scaled data, without the QA bands.
+      return image.updateMask(mask).divide(10000)
+          .select("B.*")
+          .copyProperties(image, ["system:time_start"]);
+    }
+    
+    // Map the function over one year of data and take the median.
+    // Load Sentinel-2 TOA reflectance data.
+    var collection = ee.ImageCollection('COPERNICUS/S2_SR')
+        .filterDate(start, end)
+        .filterBounds(geometry)
+        // Pre-filter to get less cloudy granules.
+        .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20))
+        .map(maskS2clouds);
+    
+    // Calculate median
+    var median2 = collection.median();
+    var s2m = median2.select('B2', 'B3', 'B4', 'B8', 'B11', 'B12');
               
-Map.addLayer(s2_lst, visParams, 'Sentinel-2 LST'+ ' Date: '+ year + m);
-
-// Export the image, specifying scale and region.
-Export.image.toDrive({
-  image: s2_lst,
-  description: 'S2_LST_' + system,
-  scale: 10,
-  maxPixels: 1e9,
-  region: geometry
-});
-
-/* Accuracy Assessment */
-  // Aggregation of S2 LST
-  var agg_S2LST = s2_lst
-    // Force the next reprojection to aggregate instead of resampling.
-    .reduceResolution({
-      reducer: ee.Reducer.mean(),
-      maxPixels: 900
-    })
-    .reproject(median.select('B2').projection(), null, 30);
+    var S2proj = median2.select('B2').projection();
     
-    // Subtract L8 and S2 values and retreive Mean deviation
-    var deviation = s2_lst.subtract(LSTm).divide(LSTm).abs();
+    // Define the visualization parameters.
+    var vizParams = {
+      bands: ['B4', 'B3', 'B2'],
+      min: 0,
+      max: 0.5,
+      gamma: [0.95, 1.1, 1]
+    };
+        
+    // Map results
+    Map.addLayer(s2m,vizParams,'Sentinel-2 RGB'+ ' Date: '+ year + m, false);
     
-      var dict = deviation.reduceRegion({
-      reducer: ee.Reducer.mean(),
-      geometry: geometry,
-      scale: 30,
-      maxPixels: 1e9
+    /* Landsat images assessment*/
+    // Load Landsat 8 SR data
+    var landsat8 = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+           .filterDate(start, end)
+           .map(maskL8sr)
+           .map(function(image) {
+              return image
+            .select(['SR_B2', 'SR_B3', 'SR_B4', 'SR_B5', 'SR_B6', 'SR_B7', 'ST_B10'])
+            .rename(['SR_B2', 'SR_B3', 'SR_B4', 'SR_B5', 'SR_B6', 'SR_B7', 'ST']);
     });
     
-    // The result is a Dictionary.  Print it.
-    var devi = dict.get('B4');
+    // Cloud masking
+    function maskL8sr(image) {
+      // Bits 3 and 4 are cloud shadow and cloud, respectively.
+      var cloudShadowBitMask = (1 << 3);
+      var cloudsBitMask = (1 << 4);
+      // Get the pixel QA band.
+      var qa = image.select('QA_PIXEL');
+      // Both flags should be set to zero, indicating clear conditions.
+      var mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0)
+                     .and(qa.bitwiseAnd(cloudsBitMask).eq(0));
+      return image.updateMask(mask);
+    }
     
-    print('Mean deviation in %', devi);
+    // Calculate median and applies scaling factors
+    function applyScaleFactors(image) {
+      var opticalBands = image.select('SR_B.').multiply(0.0000275).add(-0.2);
+      var thermalBands = image.select('ST').multiply(0.00341802).add(149.0);
+      return image.addBands(opticalBands, null, true)
+                  .addBands(thermalBands, null, true);
+    }
     
-    //-------------------------------------------------------------------------
-    //-------------------------------------------------------------------------
+    var l8m = landsat8.map(applyScaleFactors);
+                        //.reproject(S2proj, null, 30);
+    
+    var median = l8m.median();
+    
+    // Map results
+    var visualization = {
+      bands: ['SR_B4', 'SR_B3', 'SR_B2'],
+      min: 0.0,
+      max: 0.3,
+    };
+    
+    Map.centerObject(geometry,12);
+    Map.addLayer(median, visualization, 'Landsat-8 RGB'+ ' Date: '+ year + m, false);
+    
+    // LST median
+    // Conversion between Kelvin and Celsius
+    var conv = 273.15;
+    
+    var LSTm = median.select('ST').subtract(conv)
+              .reproject(S2proj, null, 30);
+    
+    var visParams = {min: -10, max: 40, palette: [
+        '040274', '040281', '0502a3', '0502b8', '0502ce', '0502e6',
+        '0602ff', '235cb1', '307ef3', '269db1', '30c8e2', '32d3ef',
+        '3be285', '3ff38f', '86e26f', '3ae237', 'b5e22e', 'd6e21f',
+        'fff705', 'ffd611', 'ffb613', 'ff8b13', 'ff6e08', 'ff500d',
+        'ff0000', 'de0101', 'c21301', 'a71001', '911003'
+      ],};
+            
+    
+    // Map result
+    Map.addLayer(LSTm,visParams,'Landsat-8 LST'+ ' Date: '+ year + m);
+    
+    // Export a cloud-optimized GeoTIFF.
+    Export.image.toDrive({
+      image: LSTm,
+      description: 'L8_LST_' + system,
+      scale: 30,
+      region: geometry,
+      fileFormat: 'GeoTIFF',
+      maxPixels: 1e10,
+      formatOptions: {
+        cloudOptimized: true
+      }
+    });
+    
+    /* Bandpass adjustment */
+      // Create a new images that is the concatenation of two bands from two sensors
+    var red = ee.Image.cat(s2m.select('B4'),median.select('SR_B4'));
+    var green = ee.Image.cat(s2m.select('B3'),median.select('SR_B3'));
+    var blue = ee.Image.cat(s2m.select('B2'),median.select('SR_B2'));
+    var NIR = ee.Image.cat(s2m.select('B8'),median.select('SR_B5'));
+    var SWIR1 = ee.Image.cat(s2m.select('B11'),median.select('SR_B6'));
+    var SWIR2 = ee.Image.cat(s2m.select('B12'),median.select('SR_B7'));
+    
+    // Calculate regression coefficients for the set of pixels
+    var linearFitr = red.reduceRegion({
+      reducer: ee.Reducer.linearFit(),
+      geometry: geometry,
+      scale: 30,
+      tileScale: 16,
+      maxPixels: 1e10
+    });
+    
+    // Extract the y-intercept and slope.
+    var b0r = linearFitr.get('offset'); // y-intercept
+    var b1r = linearFitr.get('scale'); // slope
+    
+    var new_s2r = s2m.select('B4').multiply(ee.Number(b1r)).add(ee.Number(b0r))
+              .reproject(S2proj, null, 10);
+    
+    //Map.addLayer(new_s2r,{max: 5000, min: 0}, 'Sentinel-2 RGB');
+    
+    // Calculate regression coefficients for the set of pixels
+    var linearFitg = green.reduceRegion({
+      reducer: ee.Reducer.linearFit(),
+      geometry: geometry,
+      scale: 30,
+      tileScale: 16,
+      maxPixels: 1e10
+    });
+    
+    // Extract the y-intercept and slope.
+    var b0g = linearFitg.get('offset'); // y-intercept
+    var b1g = linearFitg.get('scale'); // slope
+    
+    var new_s2g = s2m.select('B3').multiply(ee.Number(b1g)).add(ee.Number(b0g))
+              .reproject(S2proj, null, 10);
+    
+    // Calculate regression coefficients for the set of pixels
+    var linearFitb = blue.reduceRegion({
+      reducer: ee.Reducer.linearFit(),
+      geometry: geometry,
+      scale: 30,
+      tileScale: 16,
+      maxPixels: 1e10
+    });
+    
+    // Extract the y-intercept and slope.
+    var b0b = linearFitb.get('offset'); // y-intercept
+    var b1b = linearFitb.get('scale'); // slope
+    
+    var new_s2b = s2m.select('B2').multiply(ee.Number(b1b)).add(ee.Number(b0b))
+              .reproject(S2proj, null, 10);
+    
+    // Calculate regression coefficients for the set of pixels
+    var linearFitNIR = NIR.reduceRegion({
+      reducer: ee.Reducer.linearFit(),
+      geometry: geometry,
+      scale: 30,
+      tileScale: 16,
+      maxPixels: 1e10
+    });
+    
+    // Extract the y-intercept and slope.
+    var b0NIR = linearFitNIR.get('offset'); // y-intercept
+    var b1NIR = linearFitNIR.get('scale'); // slope
+    
+    var new_s2NIR = s2m.select('B8').multiply(ee.Number(b1NIR)).add(ee.Number(b0NIR))
+              .reproject(S2proj, null, 10);
+    
+    // Calculate regression coefficients for the set of pixels
+    var linearFitSWIR1 = SWIR1.reduceRegion({
+      reducer: ee.Reducer.linearFit(),
+      geometry: geometry,
+      scale: 30,
+      tileScale: 16,
+      maxPixels: 1e10
+    });
+    
+    // Extract the y-intercept and slope.
+    var b0SWIR1 = linearFitSWIR1.get('offset'); // y-intercept
+    var b1SWIR1 = linearFitSWIR1.get('scale'); // slope
+    
+    var new_s2SWIR1 = s2m.select('B11').multiply(ee.Number(b1SWIR1)).add(ee.Number(b0SWIR1))
+              .reproject(S2proj, null, 10);
+    
+    // Calculate regression coefficients for the set of pixels
+    var linearFitSWIR2 = SWIR2.reduceRegion({
+      reducer: ee.Reducer.linearFit(),
+      geometry: geometry,
+      scale: 30,
+      tileScale: 16,
+      maxPixels: 1e10
+    });
+    
+    // Extract the y-intercept and slope.
+    var b0SWIR2 = linearFitSWIR2.get('offset'); // y-intercept
+    var b1SWIR2 = linearFitSWIR2.get('scale'); // slope
+    
+    var new_s2SWIR2 = s2m.select('B12').multiply(ee.Number(b1SWIR2)).add(ee.Number(b0SWIR2))
+              .reproject(S2proj, null, 10);
+    
+    /* OLS between L8 bands and LST values */
+      // Aggregation of LST
+      var agg_LST = LSTm
+        // Force the next reprojection to aggregate instead of resampling.
+        .reduceResolution({
+          reducer: ee.Reducer.mean(),
+          maxPixels: 1024
+        })
+        .reproject(S2proj, null, 90);
+    
+    var constant = ee.Image(1);
+    
+    // Create a new image that is the concatenation of these bands
+    var imgRegress = ee.Image.cat(constant, median.select('SR_B4'), median.select('SR_B3'),
+                    median.select('SR_B2'), median.select('SR_B5'), median.select('SR_B6'),
+                    median.select('SR_B7'), agg_LST, LSTm);
+    
+    // Calculate OLS regression coefficients
+    var linearRegression = imgRegress.reduceRegion({
+      reducer: ee.Reducer.linearRegression({
+        numX: 8,
+        numY: 1
+      }),
+      geometry: geometry,
+      scale: 30,
+      tileScale: 16,
+      maxPixels: 1e10
+    });
+    
+    // Convert the coefficients array to a list.
+    var coefList = ee.Array(linearRegression.get('coefficients')).toList();
+    
+    // Extract the y-intercept and slope.
+    var b4 = ee.List(coefList.get(1)).get(0); // slope-red
+    var b3 = ee.List(coefList.get(2)).get(0); // slope-green
+    var b2 = ee.List(coefList.get(3)).get(0); // slope-blue
+    var b5 = ee.List(coefList.get(4)).get(0); // slope-NIR
+    var b6 = ee.List(coefList.get(5)).get(0); // slope-SWIR1
+    var b7 = ee.List(coefList.get(6)).get(0); // slope-SWIR2
+    var b1 = ee.List(coefList.get(7)).get(0); // slope-aggLST
+    var b0 = ee.List(coefList.get(0)).get(0); // y-intercept
+    
+    // Extract the residuals.
+    var residuals = ee.Array(linearRegression.get('residuals')).toList().get(0);
+    
+      /* Calculate residual layer */
+      var resi_OLS = median.select('SR_B4').multiply(ee.Number(b4)).add(median.select('SR_B3').multiply(ee.Number(b3)))
+                  .add(median.select('SR_B2').multiply(ee.Number(b2))).add(median.select('SR_B5').multiply(ee.Number(b5)))
+                  .add(median.select('SR_B6').multiply(ee.Number(b6))).add(median.select('SR_B7').multiply(ee.Number(b7)))
+                  .add(agg_LST.multiply(ee.Number(b1)))
+                  .add(ee.Number(b0))
+                  .subtract(LSTm)
+                  .reproject(S2proj, null, 10);
+      
+      /* Calculate S2-LST OLS*/
+      var s2_lst = new_s2r.multiply(ee.Number(b4)).add(new_s2g.multiply(ee.Number(b3)))
+                  .add(new_s2b.multiply(ee.Number(b2))).add(new_s2NIR.multiply(ee.Number(b5)))
+                  .add(new_s2SWIR1.multiply(ee.Number(b6))).add(new_s2SWIR2.multiply(ee.Number(b7)))
+                  .add(LSTm.multiply(ee.Number(b1)))
+                  .add(ee.Number(b0))
+                  //.add(resi_OLS)
+                  .reproject(S2proj, null, 10);
+                  
+    Map.addLayer(s2_lst, visParams, '10-m OLS LST'+ ' Date: '+ year + m);
+    
+      // Export the image, specifying scale and region.
+    Export.image.toDrive({
+      image: s2_lst,
+      description: 'S2_OLS_LST_' + system,
+      scale: 10,
+      maxPixels: 1e10,
+      region: geometry
+    });
+    
+      /* Accuracy Assessment OLS */
+      // Aggregation of S2 LST
+      var agg_S2LST = s2_lst
+        // Force the next reprojection to aggregate instead of resampling.
+        .reduceResolution({
+          reducer: ee.Reducer.mean(),
+          maxPixels: 1024
+        })
+        .reproject(agg_LST.projection(), null, 90);
         
+        // Subtract L8 and S2 values and retreive Mean deviation
+        var deviation = agg_S2LST.subtract(agg_LST).divide(agg_LST).abs();
+        
+          var dict = deviation.reduceRegion({
+          reducer: ee.Reducer.mean(),
+          geometry: geometry,
+          scale: 90,
+          tileScale: 16,
+          maxPixels: 1e10
+        });
+        
+        // The result is a Dictionary.  Print it.
+        var devi = dict.get('B4');
+        
+    /* RLS between L8 bands and LST values */
+    // Calculate RLS regression coefficients
+    var linearRegressionRLS = imgRegress.reduceRegion({
+      reducer: ee.Reducer.robustLinearRegression({
+        numX: 8,
+        numY: 1
+      }),
+      geometry: geometry,
+      scale: 30,
+      tileScale: 16,
+      maxPixels: 1e10
+    });
+    
+    // Convert the coefficients array to a list.
+    var coefListRLS = ee.Array(linearRegressionRLS.get('coefficients')).toList();
+    
+    // Extract the y-intercept and slope.
+    var b4rls = ee.List(coefListRLS.get(1)).get(0); // slope-red
+    var b3rls = ee.List(coefListRLS.get(2)).get(0); // slope-green
+    var b2rls = ee.List(coefListRLS.get(3)).get(0); // slope-blue
+    var b5rls = ee.List(coefListRLS.get(4)).get(0); // slope-NIR
+    var b6rls = ee.List(coefListRLS.get(5)).get(0); // slope-SWIR1
+    var b7rls = ee.List(coefListRLS.get(6)).get(0); // slope-SWIR2
+    var b1rls = ee.List(coefListRLS.get(7)).get(0); // slope-aggLST
+    var b0rls = ee.List(coefListRLS.get(0)).get(0); // y-intercept
+    
+    // Extract the residuals.
+    var residualsRLS = ee.Array(linearRegressionRLS.get('residuals')).toList().get(0);
+    
+      /* Calculate residual layer */
+      var resi_RLS = median.select('SR_B4').multiply(ee.Number(b4rls)).add(median.select('SR_B3').multiply(ee.Number(b3rls)))
+                  .add(median.select('SR_B2').multiply(ee.Number(b2rls))).add(median.select('SR_B5').multiply(ee.Number(b5rls)))
+                  .add(median.select('SR_B6').multiply(ee.Number(b6rls))).add(median.select('SR_B7').multiply(ee.Number(b7rls)))
+                  .add(agg_LST.multiply(ee.Number(b1rls)))
+                  .add(ee.Number(b0rls))
+                  .subtract(LSTm)
+                  .reproject(S2proj, null, 10);
+      
+      /* Calculate S2-LST RLS*/
+      var s2_lstRLS = new_s2r.multiply(ee.Number(b4rls)).add(new_s2g.multiply(ee.Number(b3rls)))
+                  .add(new_s2b.multiply(ee.Number(b2rls))).add(new_s2NIR.multiply(ee.Number(b5rls)))
+                  .add(new_s2SWIR1.multiply(ee.Number(b6rls))).add(new_s2SWIR2.multiply(ee.Number(b7rls)))
+                  .add(LSTm.multiply(ee.Number(b1rls)))
+                  .add(ee.Number(b0rls))
+                  //.add(resi_RLS)
+                  .reproject(S2proj, null, 10);
+                  
+    Map.addLayer(s2_lstRLS, visParams, '10-m RLS LST'+ ' Date: '+ year + m);
+    
+      // Export the image, specifying scale and region.
+    Export.image.toDrive({
+      image: s2_lstRLS,
+      description: 'S2_RLS_LST_' + system,
+      scale: 10,
+      maxPixels: 1e10,
+      region: geometry
+    });
+    
+      /* Accuracy Assessment RLS */
+      // Aggregation of S2 LST
+      var agg_S2LSTRLS = s2_lstRLS
+        // Force the next reprojection to aggregate instead of resampling.
+        .reduceResolution({
+          reducer: ee.Reducer.mean(),
+          maxPixels: 1024
+        })
+        .reproject(agg_LST.projection(), null, 90);
+        
+        // Subtract L8 and S2 values and retreive Mean deviation
+        var deviationRLS = agg_S2LSTRLS.subtract(agg_LST).divide(agg_LST).abs();
+        
+          var dictRLS = deviationRLS.reduceRegion({
+          reducer: ee.Reducer.mean(),
+          geometry: geometry,
+          scale: 90,
+          tileScale: 16,
+          maxPixels: 1e10
+        });
+        
+        // The result is a Dictionary.  Print it.
+        var deviRLS = dictRLS.get('B4');
+
+    /* OLS between L8 NDVI and LST values (DisTrad) */
+    // NDVI calculation
+    var medianndvi_1 = median.normalizedDifference(['SR_B5','SR_B4']);
+    var maskndvil8 = medianndvi_1.lt(1).and(medianndvi_1.gt(-1));
+    var medianndvi = medianndvi_1.updateMask(maskndvil8);
+
+    var s2m1 = ee.Image.cat(new_s2r,new_s2g,new_s2b,new_s2NIR, new_s2SWIR1, new_s2SWIR2);
+    var medianndvis2_1 = s2m1.normalizedDifference(['B8','B4']);
+    var maskndvis2 = medianndvis2_1.lt(1).and(medianndvis2_1.gt(-1));
+    var medianndvis2 = medianndvis2_1.updateMask(maskndvis2);
+    
+    //Map.addLayer(medianndvi, {min: 0, max: 1}, 'L8 NDVI');
+    //Map.addLayer(medianndvis2, {min: 0, max: 1}, 'S2 NDVI');
+    
+    // Create a new image that is the concatenation of these bands
+    var imgRegressdis = ee.Image.cat(constant, medianndvi, medianndvi.pow(2), LSTm);
+    
+    // Calculate OLS regression coefficients
+    var linearRegressiondis = imgRegressdis.reduceRegion({
+      reducer: ee.Reducer.linearRegression({
+        numX: 3,
+        numY: 1
+      }),
+      geometry: geometry,
+      scale: 30,
+      tileScale: 16,
+      maxPixels: 1e10
+    });
+    
+    // Convert the coefficients array to a list.
+    var coefListdis = ee.Array(linearRegressiondis.get('coefficients')).toList();
+    
+    // Extract the y-intercept and slope.
+    var b1dis = ee.List(coefListdis.get(1)).get(0); // slope-NDVI
+    var b2dis = ee.List(coefListdis.get(2)).get(0); // slope-NDVI2
+    var b0dis = ee.List(coefListdis.get(0)).get(0); // y-intercept
+    
+    // Extract the residuals.
+    var residualsdis = ee.Array(linearRegressiondis.get('residuals')).toList().get(0);
+    
+      /* Calculate residual layer */
+      var resi_dis = medianndvi.multiply(ee.Number(b1dis)).add((medianndvi.pow(2)).multiply(ee.Number(b2dis)))
+                  .add(ee.Number(b0dis))
+                  .subtract(LSTm)
+                  .reproject(S2proj, null, 30);
+    
+      /* Calculate S2-LST DisTrad*/
+      var s2_lstdis = medianndvis2.multiply(ee.Number(b1dis)).add((medianndvis2.pow(2)).multiply(ee.Number(b2dis)))
+                  .add(ee.Number(b0dis))
+                  .add(resi_dis)
+                  .reproject(S2proj, null, 10);
+   
+    Map.addLayer(s2_lstdis, visParams, '10-m DisTrad LST'+ ' Date: '+ year + m);
+    
+      // Export the image, specifying scale and region.
+    Export.image.toDrive({
+      image: s2_lstdis,
+      description: 'S2_DisTrad_LST_' + system,
+      scale: 10,
+      maxPixels: 1e10,
+      region: geometry
+    });
+    
+      /* Accuracy Assessment DisTrad */
+      // Aggregation of S2 LST
+      var agg_S2LSTdis = s2_lstdis
+        // Force the next reprojection to aggregate instead of resampling.
+        .reduceResolution({
+          reducer: ee.Reducer.mean(),
+          maxPixels: 1024
+        })
+        .reproject(agg_LST.projection(), null, 90);
+        
+        // Subtract L8 and S2 values and retreive Mean deviation
+        var deviationdis = agg_S2LSTdis.subtract(agg_LST).divide(agg_LST).abs();
+        
+          var dictdis = deviationdis.reduceRegion({
+          reducer: ee.Reducer.mean(),
+          geometry: geometry,
+          scale: 90,
+          tileScale: 16,
+          maxPixels: 1e10
+        });
+        
+        // The result is a Dictionary.  Print it.
+        var devidis = dictdis.get('nd');
+        
+        //-------------------------------------------------------------------------
+        //-------------------------------------------------------------------------
+           
+    /* Uncertainty evaluation */
+      // Reduce the region. The region parameter is the Feature geometry.
+      var countDictionary = agg_LST.reduceRegion({
+        reducer: ee.Reducer.count(),
+        geometry:geometry,
+        scale: 90,
+        tileScale: 16,
+        maxPixels: 1e10
+      });
+    
+      // Extract the y-intercept and slope.
+      var pxnb = countDictionary.get('ST');
+
+      // RMSE for OLS LST
+      var RMSE = agg_LST.subtract(agg_S2LST);
+    
+      // Reduce the region. The region parameter is the Feature geometry.
+      var RMSEDictionary = RMSE.reduceRegion({
+      reducer: ee.Reducer.sum(),
+      geometry:geometry,
+      scale: 90,
+      tileScale: 16,
+      maxPixels: 1e10
+    });
+  
+      // Extract the y-intercept and slope.
+      var vRMSE = ee.Number(RMSEDictionary.get('ST')).pow(2).divide(ee.Number(pxnb)).sqrt();
+      
+      // RMSE for RLS LST
+      var RMSE1 = agg_LST.subtract(agg_S2LSTRLS);
+    
+      // Reduce the region. The region parameter is the Feature geometry.
+      var RMSEDictionary1 = RMSE1.reduceRegion({
+        reducer: ee.Reducer.sum(),
+        geometry:geometry,
+        scale: 90,
+        tileScale: 16,
+        maxPixels: 1e10
+      });
+  
+      // Extract the y-intercept and slope.
+      var vRMSE1 = ee.Number(RMSEDictionary1.get('ST')).pow(2).divide(ee.Number(pxnb)).sqrt();
+      
+      // RMSE for DisTrad LST
+      var RMSE2 = agg_LST.subtract(agg_S2LSTdis);
+    
+      // Reduce the region. The region parameter is the Feature geometry.
+      var RMSEDictionary2 = RMSE2.reduceRegion({
+        reducer: ee.Reducer.sum(),
+        geometry:geometry,
+        scale: 90,
+        tileScale: 16,
+        maxPixels: 1e10
+      });
+  
+      // Extract the y-intercept and slope.
+      var vRMSE2 = ee.Number(RMSEDictionary2.get('ST')).pow(2).divide(ee.Number(pxnb)).sqrt();
+      
+      print('OLS Mean deviation in %', devi);
+      print('OLS root mean square of the residuals:', residuals);
+      print('OLS RMSE', vRMSE);
+      print('RLS Mean deviation in %', deviRLS);
+      print('RLS root mean square of the residuals:', residualsRLS);
+      print('RLS RMSE', vRMSE1);
+      print('DisTrad Mean deviation in %', devidis);
+      print('DisTrad root mean square of the residuals:', residualsdis);
+      print('DisTrad RMSE', vRMSE2);
+    
+    //-----------------------------------------------------------------
+    //-----------------------------------------------------------------
+  
       }}
       )
     };
@@ -422,4 +725,60 @@ app.boot = function() {
   ui.root.insert(0, main);
 };
 
+  /** Legend setup */
+
+      // Creates a color bar thumbnail image for use in legend from the given color
+      // palette.
+      function makeColorBarParams(palette) {
+        return {
+          bbox: [0, 0, 1, 0.1],
+          dimensions: '10x100',
+          format: 'png',
+          min: 0,
+          max: 1,
+          palette: palette,
+        };
+      }
+      
+      var vis = {min: -10, max: 40, palette: [
+          '040274', '040281', '0502a3', '0502b8', '0502ce', '0502e6',
+          '0602ff', '235cb1', '307ef3', '269db1', '30c8e2', '32d3ef',
+          '3be285', '3ff38f', '86e26f', '3ae237', 'b5e22e', 'd6e21f',
+          'fff705', 'ffd611', 'ffb613', 'ff8b13', 'ff6e08', 'ff500d',
+          'ff0000', 'de0101', 'c21301', 'a71001', '911003'
+        ],};
+        
+      // Create the color bar for the legend.
+      var colorBar = ui.Thumbnail({
+        image: ee.Image.pixelLonLat().select(0),
+        params: makeColorBarParams(vis.palette),
+        style: {stretch: 'horizontal', margin: '10px 8px', maxHeight: '5px'},
+      });
+      
+      // Create a panel with three numbers for the legend.
+      var legendLabels = ui.Panel({
+        widgets: [
+          ui.Label(vis.min, {margin: '4px 8px', fontSize: '11px', fontFamily: 'serif', color: 'blue', fontWeight: 'bold'}),
+          ui.Label(
+              ((vis.max-vis.min) / 2+vis.min),
+              {margin: '4px 8px', textAlign: 'center', stretch: 'horizontal', fontSize: '11px', fontFamily: 'serif', color: 'green', fontWeight: 'bold'}),
+          ui.Label(vis.max, {margin: '4px 8px', fontSize: '11px', fontFamily: 'serif', color: 'red', fontWeight: 'bold'})
+        ],
+        layout: ui.Panel.Layout.flow('horizontal'),
+      });
+      
+      var legendTitle = ui.Label({
+        value: 'Land Surface Temperature (C)',
+        style: {fontWeight: 'bold', fontFamily: 'serif'}
+      });
+      
+      // Add the legendPanel to the map.
+      var legendPanel = ui.Panel({widgets: [legendTitle, colorBar, legendLabels],
+      style: {position: 'bottom-right'} 
+      });
+      Map.add(legendPanel);
+      
+      //----------------------------------------------------------------
+      //----------------------------------------------------------------
+      
 app.boot();
